@@ -1,0 +1,11 @@
+{
+    "name": "minuet-server",
+    "version": "1.0.0",
+    "authoer": "Nakatsuji Masato",
+    "bin": {
+        "minuet": "./cli.js"
+    },
+    "dependencies": {
+        "@types/node": "^20.12.12"
+    }
+}
