@@ -5,7 +5,11 @@
     "bin": {
         "minuet": "./cli.js"
     },
+    "scripts": {
+        "postInstall": "node postinstall.js"
+    },
     "dependencies": {
-        "@types/node": "^20.12.12"
+        "@types/node": "^20.12.12",
+        "js-yaml": "^4.1.0"
     }
 }
