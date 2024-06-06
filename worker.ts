@@ -1,8 +1,10 @@
-export default class Listener {
+import { LoadBalancerListner } from "./load_balance";
+
+export default class Listener extends LoadBalancerListner {
 
     private post = "";
 
-    public onData(buffer, req, res, threadNo){
+    public onData(buffer, req, res){
         this.post += buffer;
     }
 

@@ -11,4 +11,5 @@ new LoadBalancer({
         { connectMode: LoadBalanceconnectMode.WorkerThreads, },
     ],
     workPath : __dirname + "/worker",
+    ports: [ 1234 ],
 });

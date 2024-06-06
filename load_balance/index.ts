@@ -1,6 +1,7 @@
-import { Worker } from "worker_threads";
+import { Worker, parentPort } from "worker_threads";
 import { fork, ChildProcess } from "child_process";
 import * as http from "http";
+import * as https from "https";
 
 export enum LoadBalanceSelectType {
     RoundRobin = "RoundRobin",
@@ -17,6 +18,10 @@ export enum LoadBalanceconnectMode {
 export interface LoadBalanceMap {
     connectMode: LoadBalanceconnectMode,
     proxy?: string,
+}
+
+interface LoadBalanceMapT extends LoadBalanceMap {
+    threadNo? : number,
     worker? : Worker,
     ChildProcess? : ChildProcess,
 }
@@ -31,8 +36,6 @@ export interface LoadBalanceOption {
 
 export class LoadBalancer {
 
-    private workers : Array<Worker> = [];
-
     private requestBuffer = {};
 
     private rrIndex : number = 0;
@@ -42,54 +45,32 @@ export class LoadBalancer {
     public constructor(options : LoadBalanceOption){
         this.options = options;
         for (let n = 0 ; n < options.maps.length ; n++) {
-            const map = options.maps[n];
+            const map : LoadBalanceMapT = options.maps[n];
+            map.threadNo = n;
             if (
                 map.connectMode == LoadBalanceconnectMode.WorkerThreads || 
                 map.connectMode == LoadBalanceconnectMode.ChildProcess
             ) {
 
-                const onMessage = (value)=>{
-                    if (!value.qid){ return; }
-                    if (!value.cmd){ return; }
-
-                    const buffer = this.requestBuffer[value.qid];
-                    if(!buffer){ return; }
-    
-                    if (value.cmd == "end") {
-
-                        const h = Object.keys(value.data.headers);
-                        for (let n2 = 0 ; n2 < h.length ; n2++ ){
-                            const hName = h[n2];
-                            const hValue = value.data.headers[hName];
-                            buffer.res.setHeader(hName, hValue);
-                        }
-
-                        if (!value.data.statusCode){
-                            value.data.statusCode = 200;
-                        }
-                        buffer.res.statusCode = value.data.statusCode;
-
-                        buffer.res.write(value.data.body);
-                        buffer.res.end();
-                        delete this.requestBuffer[value.qid];
-                    }
-                    else if(value.cmd == "settimeout"){
-                        buffer.res.setTimeout(value.data);
-                    }
+                const sendData = {
+                    cmd: "listen-start",
+                    data: {
+                        threadNo: map.threadNo,
+                        workPath: this.options.workPath,
+                    },
                 };
 
                 if (map.connectMode == LoadBalanceconnectMode.WorkerThreads) {
-                    map.worker = new Worker(__dirname + "/worker", {
-                        argv: [n, this.options.workPath],
-                    });    
-                    map.worker.on("message", onMessage);
+                    map.worker = new Worker(__dirname + "/worker");
                 }
                 else if (map.connectMode == LoadBalanceconnectMode.ChildProcess){
-                    map.ChildProcess = fork(__dirname + "/worker", {
-                        execArgv: [__dirname + "/worker", n.toString(), this.options.workPath],
-                    });
-                    map.ChildProcess.on("message", onMessage);
+                    map.ChildProcess = fork(__dirname + "/child_process");
                 }
+
+                this.send(map, sendData);
+                this.on(map, "message", (value)=>{
+                    this.onMessage(map, value);
+                });
 
             }
             else if (map.connectMode == LoadBalanceconnectMode.Proxy) {
@@ -97,81 +78,137 @@ export class LoadBalancer {
                 // proxy....
 
             }
-
         }
 
-        const h = http.createServer((req, res)=>{
-            const qid = Math.random();
-            this.requestBuffer[qid] = {
-                req: req,
-                res: res
-            };
+        if (options.ports){
+            for (let n = 0 ; n < options.ports.length ; n++) {
+                const port = options.ports[n];                
+                const h = http.createServer((req, res)=>{
+                    this.serverListen(req, res);
+                });
+                h.listen(port);
+            }
+        }
 
-            const sendData = {
-                url: req.url,
-                method: req.method,
-                headers: req.headers,
-                remoteAddress: req.socket.remoteAddress,
-                remortPort: req.socket.remotePort,
-                remoteFamily: req.socket.remoteFamily,
-            };
+        if (options.httpsPorts){
+            for (let n = 0 ; n < options.httpsPorts.length ; n++) {
+                const port = options.httpsPorts[n];                
+                const h = https.createServer((req, res)=>{
+                    this.serverListen(req, res);
+                });
+                h.listen(port);
+            }
+        }
+    }
 
-            const map = this.getMap();
+    private onMessage(map : LoadBalanceMapT, value : any){
+        if (!value.qid){ return; }
+        if (!value.cmd){ return; }
 
+        const buffer = this.requestBuffer[value.qid];
+        if(!buffer){ return; }
+
+        if (value.cmd == "end") {
+
+            const h = Object.keys(value.data.headers);
+            for (let n2 = 0 ; n2 < h.length ; n2++ ){
+                const hName = h[n2];
+                const hValue = value.data.headers[hName];
+                buffer.res.setHeader(hName, hValue);
+            }
+
+            if (!value.data.statusCode){
+                value.data.statusCode = 200;
+            }
+            buffer.res.statusCode = value.data.statusCode;
+
+            buffer.res.write(value.data.body);
+            buffer.res.end();
+            delete this.requestBuffer[value.qid];
+        }
+        else if(value.cmd == "on"){
+            if (!value.event){ return; }
+
+            buffer.req.on(value.event, (data)=>{
+                this.send(map, {
+                    qid: value.qid,
+                    cmd: "on-receive",
+                    data: data,
+                });
+            });
+        }
+        else if(value.cmd == "settimeout"){
+            buffer.res.setTimeout(value.data);
+        }        
+    }
+
+    private serverListen(req, res){
+        const qid = Math.random();
+        this.requestBuffer[qid] = { req, res };
+
+        const sendData = {
+            url: req.url,
+            method: req.method,
+            headers: req.headers,
+            remoteAddress: req.socket.remoteAddress,
+            remortPort: req.socket.remotePort,
+            remoteFamily: req.socket.remoteFamily,
+        };
+
+        const map = this.getMap();
+
+        this.send(map, {
+            qid: qid,
+            cmd: "begin",
+            data: sendData,
+        });
+
+        req.on("end", ()=>{
             this.send(map, {
                 qid: qid,
-                cmd: "begin",
+                cmd: "end",
                 data: sendData,
             });
+        });
 
-            req.on("end", ()=>{
-                this.send(map, {
-                    qid: qid,
-                    cmd: "end",
-                    data: sendData,
-                });
-            });
-
-            req.on("data", (value)=>{
-                this.send(map, {
-                    qid: qid,
-                    cmd: "data",
-                    data: sendData,
-                    postbuffer: value,
-                });
-            });
-
-            req.on("close", ()=>{
-                this.send(map, {
-                    qid: qid,
-                    cmd: "close",
-                    data: sendData,
-                });
-            });
-            req.on("error", (error : Error)=>{
-                this.send(map, {
-                    qid: qid,
-                    cmd: "error",
-                    data: sendData,
-                    error: error,
-                });
-            });
-            req.on("pause", ()=>{
-                this.send(map, {
-                    qid: qid,
-                    cmd: "pause",
-                    data: sendData,
-                });
-            });
-            req.on("resume",()=>{
-                this.send(map, {
-                    qid: qid,
-                    cmd: "resume",
-                    data: sendData,
-                });
+        req.on("data", (value)=>{
+            this.send(map, {
+                qid: qid,
+                cmd: "data",
+                data: sendData,
+                postbuffer: value,
             });
         });
-        h.listen(1100);
+
+        req.on("close", ()=>{
+            this.send(map, {
+                qid: qid,
+                cmd: "close",
+                data: sendData,
+            });
+        });
+        req.on("error", (error : Error)=>{
+            this.send(map, {
+                qid: qid,
+                cmd: "error",
+                data: sendData,
+                error: error,
+            });
+        });
+        req.on("pause", ()=>{
+            this.send(map, {
+                qid: qid,
+                cmd: "pause",
+                data: sendData,
+            });
+        });
+        req.on("resume",()=>{
+            this.send(map, {
+                qid: qid,
+                cmd: "resume",
+                data: sendData,
+            });
+        });
     }
 
     private getMap(){
@@ -197,10 +234,20 @@ export class LoadBalancer {
         }
     }
 
+    private on(map: LoadBalanceMapT, event, callback){
+        if (map.connectMode == LoadBalanceconnectMode.WorkerThreads){
+            map.worker.on(event, callback);
+        }        
+        else if (map.connectMode == LoadBalanceconnectMode.ChildProcess){
+            map.ChildProcess.on(event, callback);
+        }
+    }
+
 }
 
 export class HttpRequest {
 
+    private qid;
     public url : string;
     public method : string;
     public headers; 
@@ -209,8 +256,10 @@ export class HttpRequest {
     public remoteFamily : string;
 
     private pp;
+    private onEventHandle = {};
 
-    public constructor(data, pp?){
+    public constructor(qid, data, pp?){
+        this.qid = qid;
         this.url = data.url;
         this.method = data.method;
         this.headers = data.headers;
@@ -219,6 +268,20 @@ export class HttpRequest {
         this.remoteFamily = data.remoteFamily;
         if (pp){
             this.pp = pp;
+        }
+    }
+
+    public on(event, callback){
+        const send = {
+            qid: this.qid,
+            cmd: "on",
+            event: event,
+        }
+        if (this.pp){
+            this.pp.postMessage(send);
+        }
+        else {
+            process.send(send);           
         }
     }
 }
@@ -231,7 +294,9 @@ export class HttpResponse {
 
     private headers = {};
 
-    private statusCode : number;
+    public statusCode : number;
+
+    public statusMessage : string;
 
     private text : string = "";
 
@@ -266,6 +331,7 @@ export class HttpResponse {
                 body: this.text,
                 statusCode: this.statusCode,
                 headers: this.headers,
+                statusMessage: this.statusMessage,
             },
         };
         if(this.pp){
@@ -275,4 +341,102 @@ export class HttpResponse {
             process.send(send);
         }
     }
+}
+
+export class LoadBalanceThread {
+
+    private workerFlg : boolean = false;
+    public threadNo;
+    private Listener;
+    private requestBuffer = {};
+    
+    public constructor(workerFlg : boolean){
+        this.workerFlg = workerFlg;
+        if (this.workerFlg){
+            parentPort.on("message", (value)=>{
+                this.onMessage(value);
+            });
+        }
+        else {
+            process.on("message", (value)=>{
+                this.onMessage(value);
+            });
+        }
+    }
+
+    private onMessage(value : any) {
+
+        if (!value.cmd){ return; }
+        
+        if (value.cmd == "listen-start"){
+            this.threadNo = value.data.threadNo;
+            this.Listener = require(value.data.workPath).default;
+            return;
+        }
+    
+        if (!value.qid){ return; }
+    
+        if (value.cmd == "begin"){
+            let req, res;
+            if (this.workerFlg){
+                req = new HttpRequest(value.qid, value.data, parentPort);
+                res = new HttpResponse(value.qid, req, parentPort);    
+            }
+            else {
+                req = new HttpRequest(value.qid, value.data);
+                res = new HttpResponse(value.qid, req);    
+            }
+            const listener = new this.Listener();
+    
+            this.requestBuffer[value.qid] = { listener, req, res };
+            return;
+        }
+    
+        if (!this.requestBuffer[value.qid]){ return; }
+    
+        const listener = this.requestBuffer[value.qid].listener;
+        const req = this.requestBuffer[value.qid].req;
+        const res = this.requestBuffer[value.qid].res;
+    
+        if (listener.request){
+            listener.request(req, res, this.threadNo);
+        }
+    
+        if (value.md=="data"){
+            if (listener.onData){
+                listener.onData(value.postbuffer, req, res, this.threadNo);
+            }
+        }
+        else if (value.cmd == "end"){
+            if (listener.onEnd){
+                listener.onEnd(req, res, this.threadNo);
+            }
+        }
+        else if (value.cmd == "close") {
+            if (listener.onClose){
+                listener.onClose(req, res, this.threadNo);
+            }
+            delete this.requestBuffer[value.qid];
+        }
+        else if (value.cmd == "error") {
+            if (listener.onError){
+                listener.onError(value.error, req, res, this.threadNo);
+            }
+            delete this.requestBuffer[value.qid];
+        }
+        else if (value.cmd == "pause") {
+            if (listener.onPause){
+                listener.onPause(req, res, this.threadNo);
+            }
+        }
+        else if (value.cmd == "resume") {
+            if (listener.onResume){
+                listener.onResume(req, res, this.threadNo);
+            }
+        } 
+    }
+}
+
+export class LoadBalancerListner {
+    public threadNo : number;
 }
