@@ -16,7 +16,7 @@ export enum LoadBalanceconnectMode {
 }
 
 export interface LoadBalanceMap {
-    connectMode: LoadBalanceconnectMode,
+    mode: LoadBalanceconnectMode,
     proxy?: string,
 }
 
@@ -31,7 +31,8 @@ export interface LoadBalanceOption {
     maps : Array<LoadBalanceMap>;
     ports?: Array<number>,
     httpsPorts?: Array<number>,
-    workPath: string,
+    workPath?: string,
+    manualHandle? : Function,
 }
 
 export class LoadBalancer {
@@ -48,8 +49,8 @@ export class LoadBalancer {
             const map : LoadBalanceMapT = options.maps[n];
             map.threadNo = n;
             if (
-                map.connectMode == LoadBalanceconnectMode.WorkerThreads || 
-                map.connectMode == LoadBalanceconnectMode.ChildProcess
+                map.mode == LoadBalanceconnectMode.WorkerThreads || 
+                map.mode == LoadBalanceconnectMode.ChildProcess
             ) {
 
                 const sendData = {
@@ -60,10 +61,10 @@ export class LoadBalancer {
                     },
                 };
 
-                if (map.connectMode == LoadBalanceconnectMode.WorkerThreads) {
+                if (map.mode == LoadBalanceconnectMode.WorkerThreads) {
                     map.worker = new Worker(__dirname + "/worker");
                 }
-                else if (map.connectMode == LoadBalanceconnectMode.ChildProcess){
+                else if (map.mode == LoadBalanceconnectMode.ChildProcess){
                     map.ChildProcess = fork(__dirname + "/child_process");
                 }
 
@@ -73,7 +74,7 @@ export class LoadBalancer {
                 });
 
             }
-            else if (map.connectMode == LoadBalanceconnectMode.Proxy) {
+            else if (map.mode == LoadBalanceconnectMode.Proxy) {
 
                 // proxy....
 
@@ -117,10 +118,12 @@ export class LoadBalancer {
                 buffer.res.setHeader(hName, hValue);
             }
 
-            if (!value.data.statusCode){
-                value.data.statusCode = 200;
+            if (value.data.statusCode){
+                buffer.res.statusCode = value.data.statusCode;
             }
-            buffer.res.statusCode = value.data.statusCode;
+            if (value.data.statusMessage){
+                buffer.res.statusMessage = value.data.statusMessage;
+            }
 
             buffer.res.write(value.data.body);
             buffer.res.end();
@@ -211,34 +214,47 @@ export class LoadBalancer {
         });
     }
 
-    private getMap(){
-        if (this.options.type ==LoadBalanceSelectType.RoundRobin) {
+    private getMap(type? : LoadBalanceSelectType){
+        if (!type) {
+            type = this.options.type;
+        }
+        if (type ==LoadBalanceSelectType.RoundRobin) {
+            // Round Robin Balancing....
             if(this.rrIndex >= this.options.maps.length){
                 this.rrIndex = 0;
             }           
             this.rrIndex++; 
             return this.options.maps[this.rrIndex - 1];
         }
-        else if (this.options.type == LoadBalanceSelectType.RandomRobin){
+        else if (type == LoadBalanceSelectType.RandomRobin){
             const index = parseInt((Math.random()*1000).toString()) % this.options.maps.length;
+            return this.options.maps[index];
+        }
+        else if (type == LoadBalanceSelectType.Manual){
+            // Manual Balancing....
+            if (!this.options.manualHandle){
+                return this.getMap(LoadBalanceSelectType.RoundRobin);
+            }
+
+            const index = this.options.manualHandle(this.options.maps.length);
             return this.options.maps[index];
         }
     }
 
     private send(map, sendMessage){
-        if (map.connectMode == LoadBalanceconnectMode.WorkerThreads){
+        if (map.mode == LoadBalanceconnectMode.WorkerThreads){
             map.worker.postMessage(sendMessage);
         }        
-        else if (map.connectMode == LoadBalanceconnectMode.ChildProcess){
+        else if (map.mode == LoadBalanceconnectMode.ChildProcess){
             map.ChildProcess.send(sendMessage);
         }
     }
 
     private on(map: LoadBalanceMapT, event, callback){
-        if (map.connectMode == LoadBalanceconnectMode.WorkerThreads){
+        if (map.mode == LoadBalanceconnectMode.WorkerThreads){
             map.worker.on(event, callback);
         }        
-        else if (map.connectMode == LoadBalanceconnectMode.ChildProcess){
+        else if (map.mode == LoadBalanceconnectMode.ChildProcess){
             map.ChildProcess.on(event, callback);
         }
     }
@@ -437,6 +453,19 @@ export class LoadBalanceThread {
     }
 }
 
-export class LoadBalancerListner {
-    public threadNo : number;
+export interface LoadBalancerListner {
+
+    request?(req? : http.IncomingMessage, res?: http.ServerResponse<http.IncomingMessage>, threadNo? : number) : void;
+
+    onData?(data : any, req? : http.IncomingMessage, res?: http.ServerResponse<http.IncomingMessage>, threadNo? : number) : void,
+
+    onEnd?(req? : http.IncomingMessage, res?: http.ServerResponse<http.IncomingMessage>, threadNo? : number) : void,
+
+    onClose?(req? : http.IncomingMessage, res?: http.ServerResponse<http.IncomingMessage>, threadNo? : number) : void,
+
+    onError?(error : any , req? : http.IncomingMessage, res?: http.ServerResponse<http.IncomingMessage>, threadNo? : number) : void,
+
+    onPause?(req? : http.IncomingMessage, res?: http.ServerResponse<http.IncomingMessage>, threadNo? : number) : void,
+
+    onResume?(req? : http.IncomingMessage, res?: http.ServerResponse<http.IncomingMessage>, threadNo? : number) : void,
 }

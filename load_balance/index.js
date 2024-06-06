@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LoadBalancerListner = exports.LoadBalanceThread = exports.HttpResponse = exports.HttpRequest = exports.LoadBalancer = exports.LoadBalanceconnectMode = exports.LoadBalanceSelectType = void 0;
+exports.LoadBalanceThread = exports.HttpResponse = exports.HttpRequest = exports.LoadBalancer = exports.LoadBalanceconnectMode = exports.LoadBalanceSelectType = void 0;
 const worker_threads_1 = require("worker_threads");
 const child_process_1 = require("child_process");
 const http = require("http");
@@ -25,8 +25,8 @@ class LoadBalancer {
         for (let n = 0; n < options.maps.length; n++) {
             const map = options.maps[n];
             map.threadNo = n;
-            if (map.connectMode == LoadBalanceconnectMode.WorkerThreads ||
-                map.connectMode == LoadBalanceconnectMode.ChildProcess) {
+            if (map.mode == LoadBalanceconnectMode.WorkerThreads ||
+                map.mode == LoadBalanceconnectMode.ChildProcess) {
                 const sendData = {
                     cmd: "listen-start",
                     data: {
@@ -34,10 +34,10 @@ class LoadBalancer {
                         workPath: this.options.workPath,
                     },
                 };
-                if (map.connectMode == LoadBalanceconnectMode.WorkerThreads) {
+                if (map.mode == LoadBalanceconnectMode.WorkerThreads) {
                     map.worker = new worker_threads_1.Worker(__dirname + "/worker");
                 }
-                else if (map.connectMode == LoadBalanceconnectMode.ChildProcess) {
+                else if (map.mode == LoadBalanceconnectMode.ChildProcess) {
                     map.ChildProcess = (0, child_process_1.fork)(__dirname + "/child_process");
                 }
                 this.send(map, sendData);
@@ -45,7 +45,7 @@ class LoadBalancer {
                     this.onMessage(map, value);
                 });
             }
-            else if (map.connectMode == LoadBalanceconnectMode.Proxy) {
+            else if (map.mode == LoadBalanceconnectMode.Proxy) {
                 // proxy....
             }
         }
@@ -86,10 +86,12 @@ class LoadBalancer {
                 const hValue = value.data.headers[hName];
                 buffer.res.setHeader(hName, hValue);
             }
-            if (!value.data.statusCode) {
-                value.data.statusCode = 200;
+            if (value.data.statusCode) {
+                buffer.res.statusCode = value.data.statusCode;
             }
-            buffer.res.statusCode = value.data.statusCode;
+            if (value.data.statusMessage) {
+                buffer.res.statusMessage = value.data.statusMessage;
+            }
             buffer.res.write(value.data.body);
             buffer.res.end();
             delete this.requestBuffer[value.qid];
@@ -172,32 +174,44 @@ class LoadBalancer {
             });
         });
     }
-    getMap() {
-        if (this.options.type == LoadBalanceSelectType.RoundRobin) {
+    getMap(type) {
+        if (!type) {
+            type = this.options.type;
+        }
+        if (type == LoadBalanceSelectType.RoundRobin) {
+            // Round Robin Balancing....
             if (this.rrIndex >= this.options.maps.length) {
                 this.rrIndex = 0;
             }
             this.rrIndex++;
             return this.options.maps[this.rrIndex - 1];
         }
-        else if (this.options.type == LoadBalanceSelectType.RandomRobin) {
+        else if (type == LoadBalanceSelectType.RandomRobin) {
             const index = parseInt((Math.random() * 1000).toString()) % this.options.maps.length;
+            return this.options.maps[index];
+        }
+        else if (type == LoadBalanceSelectType.Manual) {
+            // Manual Balancing....
+            if (!this.options.manualHandle) {
+                return this.getMap(LoadBalanceSelectType.RoundRobin);
+            }
+            const index = this.options.manualHandle(this.options.maps.length);
             return this.options.maps[index];
         }
     }
     send(map, sendMessage) {
-        if (map.connectMode == LoadBalanceconnectMode.WorkerThreads) {
+        if (map.mode == LoadBalanceconnectMode.WorkerThreads) {
             map.worker.postMessage(sendMessage);
         }
-        else if (map.connectMode == LoadBalanceconnectMode.ChildProcess) {
+        else if (map.mode == LoadBalanceconnectMode.ChildProcess) {
             map.ChildProcess.send(sendMessage);
         }
     }
     on(map, event, callback) {
-        if (map.connectMode == LoadBalanceconnectMode.WorkerThreads) {
+        if (map.mode == LoadBalanceconnectMode.WorkerThreads) {
             map.worker.on(event, callback);
         }
-        else if (map.connectMode == LoadBalanceconnectMode.ChildProcess) {
+        else if (map.mode == LoadBalanceconnectMode.ChildProcess) {
             map.ChildProcess.on(event, callback);
         }
     }
@@ -360,6 +374,3 @@ class LoadBalanceThread {
     }
 }
 exports.LoadBalanceThread = LoadBalanceThread;
-class LoadBalancerListner {
-}
-exports.LoadBalancerListner = LoadBalancerListner;

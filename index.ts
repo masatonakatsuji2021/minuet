@@ -3,12 +3,12 @@ import { LoadBalanceconnectMode, LoadBalancer, LoadBalanceSelectType } from "./l
 new LoadBalancer({
     type: LoadBalanceSelectType.RoundRobin,
     maps:[
-        { connectMode: LoadBalanceconnectMode.WorkerThreads, },
-        { connectMode: LoadBalanceconnectMode.WorkerThreads, },
-        { connectMode: LoadBalanceconnectMode.WorkerThreads, },
-        { connectMode: LoadBalanceconnectMode.WorkerThreads, },
-        { connectMode: LoadBalanceconnectMode.WorkerThreads, },
-        { connectMode: LoadBalanceconnectMode.WorkerThreads, },
+        { mode: LoadBalanceconnectMode.WorkerThreads, },        // 0
+        { mode: LoadBalanceconnectMode.WorkerThreads, },        // 1
+        { mode: LoadBalanceconnectMode.WorkerThreads, },        // 2
+        { mode: LoadBalanceconnectMode.WorkerThreads, },        // 3
+        { mode: LoadBalanceconnectMode.WorkerThreads, },        // 4
+        { mode: LoadBalanceconnectMode.WorkerThreads, },        // 5
     ],
     workPath : __dirname + "/worker",
     ports: [ 1234 ],
