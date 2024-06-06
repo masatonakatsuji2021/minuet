@@ -2,6 +2,7 @@ import { Worker, parentPort } from "worker_threads";
 import { fork, ChildProcess } from "child_process";
 import * as http from "http";
 import * as https from "https";
+import * as httpProxy from "http-proxy";
 
 export enum LoadBalanceSelectType {
     RoundRobin = "RoundRobin",
@@ -43,8 +44,11 @@ export class LoadBalancer {
 
     private options : LoadBalanceOption;
 
+    private proxy;
+
     public constructor(options : LoadBalanceOption){
         this.options = options;
+        this.proxy = httpProxy.createProxyServer({});
         for (let n = 0 ; n < options.maps.length ; n++) {
             const map : LoadBalanceMapT = options.maps[n];
             map.threadNo = n;
@@ -72,11 +76,6 @@ export class LoadBalancer {
                 this.on(map, "message", (value)=>{
                     this.onMessage(map, value);
                 });
-
-            }
-            else if (map.mode == LoadBalanceconnectMode.Proxy) {
-
-                // proxy....
 
             }
         }
@@ -146,6 +145,13 @@ export class LoadBalancer {
     }
 
     private serverListen(req, res){
+        const map : LoadBalanceMapT = this.getMap();
+        if (map.mode == LoadBalanceconnectMode.Proxy){
+            // reverse proxy access...
+            this.proxy.web(req, res, { target: map.proxy });
+            return;
+        }
+
         const qid = Math.random();
         this.requestBuffer[qid] = { req, res };
 
@@ -158,7 +164,6 @@ export class LoadBalancer {
             remoteFamily: req.socket.remoteFamily,
         };
 
-        const map = this.getMap();
 
         this.send(map, {
             qid: qid,

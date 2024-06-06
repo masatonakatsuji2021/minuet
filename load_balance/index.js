@@ -5,6 +5,7 @@ const worker_threads_1 = require("worker_threads");
 const child_process_1 = require("child_process");
 const http = require("http");
 const https = require("https");
+const httpProxy = require("http-proxy");
 var LoadBalanceSelectType;
 (function (LoadBalanceSelectType) {
     LoadBalanceSelectType["RoundRobin"] = "RoundRobin";
@@ -22,6 +23,7 @@ class LoadBalancer {
         this.requestBuffer = {};
         this.rrIndex = 0;
         this.options = options;
+        this.proxy = httpProxy.createProxyServer({});
         for (let n = 0; n < options.maps.length; n++) {
             const map = options.maps[n];
             map.threadNo = n;
@@ -44,9 +46,6 @@ class LoadBalancer {
                 this.on(map, "message", (value) => {
                     this.onMessage(map, value);
                 });
-            }
-            else if (map.mode == LoadBalanceconnectMode.Proxy) {
-                // proxy....
             }
         }
         if (options.ports) {
@@ -113,6 +112,12 @@ class LoadBalancer {
         }
     }
     serverListen(req, res) {
+        const map = this.getMap();
+        if (map.mode == LoadBalanceconnectMode.Proxy) {
+            // reverse proxy access...
+            this.proxy.web(req, res, { target: map.proxy });
+            return;
+        }
         const qid = Math.random();
         this.requestBuffer[qid] = { req, res };
         const sendData = {
@@ -123,7 +128,6 @@ class LoadBalancer {
             remortPort: req.socket.remotePort,
             remoteFamily: req.socket.remoteFamily,
         };
-        const map = this.getMap();
         this.send(map, {
             qid: qid,
             cmd: "begin",

@@ -20,5 +20,4 @@ export default class Listener implements LoadBalancerListner {
         res.write("OK.....ThreadNo=" + threadNo);
         res.end();
     }
-
 }
